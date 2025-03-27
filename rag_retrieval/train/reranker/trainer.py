@@ -58,7 +58,6 @@ class Trainer:
 
     def train(self):
         for current_epoch in range(1, self.epochs + 1):
-
             self.model.train()
             self.progress_bar.on_epoch_start()
 
@@ -67,35 +66,46 @@ class Trainer:
                     self.optimizer.zero_grad()
 
                     batch_output = self.model(batch[0], batch[1])
-                    loss = batch_output.loss
+                    loss = batch_output['loss']
 
                     self.accelerator.backward(loss)
+                    if batch_index % self.log_interval == 0:
+                        # 仅适用于 zero 0/1，不适用于 zero 2/3、FSDP 等梯度分片存储的情况
+                        total_norm = torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(), 
+                            max_norm=float('inf'), # 设为无穷大以仅计算范数，不实际裁剪
+                            norm_type=2
+                        )
+                    
                     self.optimizer.step()
 
                     self.lr_scheduler.step()
                     self.train_loss_tracker.update(loss)
 
                 if batch_index % self.log_interval == 0:
+                    log_dic = {
+                        'cur_loss': batch_output['loss'],
+                        'norm': total_norm,
+                        'lr':float(self.lr_scheduler.get_lr()[0]),
+                        'avg_loss': self.train_loss_tracker.loss,
+                    }
                     self.log_metrics(
-                        {
-                        'loss': self.train_loss_tracker.loss,
-                        'lr':float(self.lr_scheduler.get_lr()[0])
-                        },
+                        log_dic,
                         step=self.current_step,
                     )
 
-                # if (
-                #     self.validation_dataloader
-                #     and batch_index % (self.log_interval * 30) == 0
-                # ):
-                #     validation_loss = evaluate(
-                #         self.model,
-                #         self.validation_dataloader,
-                #         self.validation_loss_tracker,
-                #     )
-                #     self.accelerator.log(
-                #         {"validation_loss": validation_loss}, step=self.current_step
-                #     )
+                if (
+                    self.validation_dataloader
+                    and batch_index % (self.log_interval * 10) == 0
+                ):
+                    validation_loss = evaluate(
+                        self.model,
+                        self.validation_dataloader,
+                        self.validation_loss_tracker,
+                    )
+                    self.accelerator.log(
+                        {"val_loss": validation_loss}, step=self.current_step
+                    )
                     # If you want to save the model with min validation loss, uncomment the following code.
                     # if validation_loss < self.min_val_loss:
                     #     if self.accelerator.is_local_main_process and self.current_step > 0:
@@ -119,22 +129,12 @@ class Trainer:
             self.train_loss_tracker.on_epoch_end()
             self.progress_bar.on_epoch_end()
 
-            if self.validation_dataloader:
-                validation_loss = evaluate(
-                    self.model,
-                    self.validation_dataloader,
-                    self.validation_loss_tracker,
-                )
-                self.accelerator.print(
-                    f"Epoch {current_epoch} Validation loss: {validation_loss:.6f}"
-                )
-
             if self.save_on_epoch_end:
                 if self.accelerator.is_local_main_process:
                     save_dir = self.get_checkpoint_dir(current_epoch)
                     print(save_dir)
                     unwrapped_model = self.accelerator.unwrap_model(self.model)
-                    unwrapped_model.save_pretrained(save_dir, safe_serialization=True)
+                    unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
                     self.tokenizer.save_pretrained(save_dir)
                 self.accelerator.wait_for_everyone()
 
@@ -187,10 +187,9 @@ def evaluate(
 ):
     loss_tracker = loss_tracker or LossTracker()
     for batch in dataloader:
-        with torch.no_grad():
+        with torch.inference_mode():
             batch_output = model(batch[0], batch[1])
-            loss = batch_output.loss
-            loss_tracker.update(loss)
+            loss_tracker.update(batch_output['loss'])
     loss = loss_tracker.loss
     loss_tracker.on_epoch_end()
     return loss

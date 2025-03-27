@@ -3,6 +3,7 @@ from torch import nn
 from torch.nn import MSELoss, BCEWithLogitsLoss
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import tqdm
+import ranking_loss
 
 
 class CrossEncoder(nn.Module):
@@ -21,20 +22,24 @@ class CrossEncoder(nn.Module):
         self.loss_type = loss_type
         self.query_format = query_format
         self.document_format = document_format
+        self.train_group_size = None  # to be set in train_reranker.py
 
     def forward(self, batch, labels=None):
 
         output = self.model(**batch)
 
         if labels is not None:
-            logits = output.logits
-            if self.loss_type == "point_mse":
-                logits = torch.sigmoid(logits)
-                loss_fct = MSELoss()
-                loss = loss_fct(logits.squeeze(), labels.squeeze())
-            elif self.loss_type == "point_ce":
-                loss_fct = BCEWithLogitsLoss()
-                loss = loss_fct(logits.squeeze(), labels.squeeze())
+            logits = output.logits.squeeze()
+            if self.loss_type == "pointwise_mse":
+                loss = ranking_loss.pointwise_mse(logits, labels)
+            elif self.loss_type == "pointwise_bce":
+                loss = ranking_loss.pointwise_bce(logits, labels)
+            elif self.loss_type == "pairwise_ranknet":
+                loss = ranking_loss.pairwise_ranknet(
+                    logits, labels, self.train_group_size
+                )
+            elif self.loss_type == "listwise_ce":
+                loss = ranking_loss.listwise_ce(logits, labels, self.train_group_size)
             output["loss"] = loss
 
         return output

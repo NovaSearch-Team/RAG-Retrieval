@@ -1,8 +1,8 @@
 import torch
 from torch import nn
-from torch.nn import MSELoss, BCEWithLogitsLoss
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import tqdm
+import ranking_loss
 
 
 class LLMDecoder(nn.Module):
@@ -10,7 +10,7 @@ class LLMDecoder(nn.Module):
         self,
         hf_model=None,
         tokenizer=None,
-        loss_type="point_ce",
+        loss_type="pointwise_bce",
         query_format="{}",
         document_format="{}",
         seq="",
@@ -21,6 +21,7 @@ class LLMDecoder(nn.Module):
         self.model = hf_model
         self.tokenizer = tokenizer
         self.loss_type = loss_type
+        self.train_group_size = None  # to be set in train_reranker.py
         self.query_format = query_format
         self.document_format = document_format
         self.seq = seq
@@ -33,18 +34,20 @@ class LLMDecoder(nn.Module):
         self.sep_token_ids = self.tokenizer.encode(self.seq, add_special_tokens=False)
 
     def forward(self, batch, labels=None):
-
-        output = self.model(**batch)
+        output = self.model(**batch) # odict_keys(['logits', 'past_key_values'])
 
         if labels is not None:
-            logits = output.logits
-            if self.loss_type == "point_mse":
-                logits = torch.sigmoid(logits)
-                loss_fct = MSELoss()
-                loss = loss_fct(logits.squeeze(), labels.squeeze())
-            elif self.loss_type == "point_ce":
-                loss_fct = BCEWithLogitsLoss()
-                loss = loss_fct(logits.squeeze(), labels.squeeze())
+            logits = output.logits.squeeze()
+            if self.loss_type == "pointwise_mse":
+                loss = ranking_loss.pointwise_mse(logits, labels)
+            elif self.loss_type == "pointwise_bce":
+                loss = ranking_loss.pointwise_bce(logits, labels)
+            elif self.loss_type == "pairwise_ranknet":
+                loss = ranking_loss.pairwise_ranknet(
+                    logits, labels, self.train_group_size
+                )
+            elif self.loss_type == "listwise_ce":
+                loss = ranking_loss.listwise_ce(logits, labels, self.train_group_size)
             output["loss"] = loss
 
         return output
@@ -114,7 +117,7 @@ class LLMDecoder(nn.Module):
     def from_pretrained(
         cls,
         model_name_or_path,
-        loss_type="point_ce",
+        loss_type="pointwise_bce",
         num_labels=1,
         query_format="query: {}",
         document_format="document: {}",
@@ -130,6 +133,7 @@ class LLMDecoder(nn.Module):
         tokenizer = AutoTokenizer.from_pretrained(
             model_name_or_path, use_fast=True, trust_remote_code=True
         )
+        tokenizer.deprecation_warnings["Asking-to-pad-a-fast-tokenizer"] = True
 
         # if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
