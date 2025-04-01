@@ -73,6 +73,7 @@ def parse_args():
     parser.add_argument("--log_with", type=str, default='wandb', help='wandb,tensorboard')
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--eval_steps", type=int, default=None)
+    parser.add_argument("--save_steps", type=int, default=None)
 
     parser.add_argument('--use_mrl', action='store_true', help='if use mrl loss')
     parser.add_argument('--mrl_dims', type=str, help='list of mrl dims', default='128, 256, 512, 768, 1024, 1280, 1536, 1792')
@@ -203,6 +204,7 @@ def main():
         lr_scheduler=lr_scheduler,
         log_interval=args.log_interval * accelerator.gradient_state.num_steps,
         eval_steps=args.eval_steps * accelerator.gradient_state.num_steps if args.eval_steps else args.eval_steps,
+        save_steps=args.save_steps * accelerator.gradient_state.num_steps if args.save_steps else args.save_steps,
         save_on_epoch_end=args.save_on_epoch_end,
         tokenizer=tokenizer,
     )

@@ -29,7 +29,8 @@ class Trainer:
         epochs: int = 3,
         lr_scheduler: LRScheduler,
         log_interval: int = 50,
-        eval_steps: int = 50,
+        eval_steps: int | None = 50,
+        save_steps: int | None = None,
         save_on_epoch_end: bool = True,
         tokenizer,
     ):
@@ -42,6 +43,7 @@ class Trainer:
         self.epochs = epochs
         self.log_interval = log_interval
         self.eval_steps = eval_steps
+        self.save_steps = save_steps
         self.save_on_epoch_end = save_on_epoch_end
         self.tokenizer = tokenizer
 
@@ -101,6 +103,17 @@ class Trainer:
                     self.accelerator.print(f'Step {self.current_step} Validation loss: {validation_loss:.6f}')
                     self.accelerator.log(validation_metrics, step=self.current_step)
 
+                if self.save_steps and self.current_step % self.save_steps == 0:
+                    # self.accelerator.save_state(self.get_checkpoint_dir())
+                    if self.accelerator.is_local_main_process:
+                        save_dir=self.get_checkpoint_dir(self.current_step, is_step=True)  # TODO: 改为按照step保存
+                        unwrapped_model = self.accelerator.unwrap_model(self.model)
+                        unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
+                        # self.accelerator.save_model(self.model, save_dir)
+                        self.tokenizer.save_pretrained(save_dir)
+                        # self.accelerator.save_model(self.model, save_dir)
+                    self.accelerator.wait_for_everyone()
+
             train_metrics = self.add_prefix({'loss': self.train_loss_tracker.loss}, 'train')
             self.accelerator.log(train_metrics, step=current_epoch)
             self.train_loss_tracker.on_epoch_end()
@@ -141,7 +154,7 @@ class Trainer:
     def add_prefix(values: dict[str, Any], prefix: str):
         return {f'{prefix}/{k}': v for k, v in values.items()}
 
-    def get_checkpoint_dir(self, current_epoch):
+    def get_checkpoint_dir(self, current_epoch, is_step=False):
         # COPY FROM accelerator to fix Checkpoint bug
         self.accelerator.project_configuration.automatic_checkpoint_naming = False
         output_dir = os.path.join(self.accelerator.project_dir, 'checkpoints')
@@ -159,7 +172,7 @@ class Trainer:
                 for folder in folders[: len(folders) + 1 - self.accelerator.project_configuration.total_limit]:
                     shutil.rmtree(folder)
 
-        output_dir = os.path.join(output_dir, f'checkpoint_{current_epoch-1}')
+        output_dir = os.path.join(output_dir, f'checkpoint_{current_epoch-1}' if not is_step else f'checkpoint-step{current_epoch}')
         if self.accelerator.is_local_main_process:
             os.makedirs(output_dir, exist_ok=True)
         return output_dir
