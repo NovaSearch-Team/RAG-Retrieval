@@ -6,8 +6,8 @@ import torch
 from accelerate.utils import set_seed, ProjectConfiguration
 from model_bert import CrossEncoder
 from model_llm import LLMDecoder
-from transformers import get_cosine_schedule_with_warmup
-from data import RankerDataset
+from transformers import get_cosine_schedule_with_warmup, get_wsd_schedule
+from data import PointwiseRankerDataset, GroupedRankerDataset
 from torch.utils.data import DataLoader
 from trainer import Trainer
 from accelerate import Accelerator
@@ -47,7 +47,14 @@ def parse_args():
         help="choose from [bert_encoder,llm_decoder]",
     )
     parser.add_argument("--train_dataset", help="training file")
+    parser.add_argument("--train_dataset_type", help="the type of training file", default="pointwise")
+    parser.add_argument("--train_group_size", type=int, default=8)
+    parser.add_argument("--train_label_key", help="label key of training", default="label")
+    
     parser.add_argument("--val_dataset", help="validation file", default=None)
+    parser.add_argument("--val_dataset_type", help="the type of validation file", default="pointwise")
+    parser.add_argument("--val_label_key", help="label key of validation", default="label")
+    parser.add_argument("--shuffle_rate", type=float, default=0.0)
     parser.add_argument("--output_dir", help="output dir", default="./output")
     parser.add_argument("--save_on_epoch_end", type=int, default=0)
     parser.add_argument("--num_max_checkpoints", type=int, default=5)
@@ -57,12 +64,13 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--seed", type=int, default=666)
     parser.add_argument("--warmup_proportion", type=float, default=0.1)
+    parser.add_argument("--stable_proportion", type=float, default=0.0)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument(
         "--loss_type",
         type=str,
-        default="point_ce",
-        help="chose from [point_ce, point_mse]",
+        default="pointwise_bce",
+        help="chose from [pointwise_bce, pointwise_mse, pairwise_ranknet, listwise_ce]",
     )
     parser.add_argument(
         "--log_with", type=str, default="wandb", help="wandb, tensorboard"
@@ -136,24 +144,55 @@ def main():
         )
     else:
         raise ValueError("Model type not currently supported")
-
-    train_dataset = RankerDataset(
-            args.train_dataset,
-            target_model=model,
-            max_len=args.max_len,
-            max_label=args.max_label,
-            min_label=args.min_label,
-            tag="training",
-        )
+    
+    if "pointwise" == args.train_dataset_type:
+        train_dataset = PointwiseRankerDataset(
+                data_path=args.train_dataset,
+                label_key=args.train_label_key,
+                target_model=model,
+                max_len=args.max_len,
+                max_label=args.max_label,
+                min_label=args.min_label,
+                shuffle_rate=args.shuffle_rate,
+                tag="training",
+            )
+        model.train_group_size = 1
+    elif "grouped" == args.train_dataset_type:
+        train_dataset = GroupedRankerDataset(
+                data_path=args.train_dataset,
+                label_key=args.train_label_key,
+                target_model=model,
+                max_len=args.max_len,
+                shuffle_rate=args.shuffle_rate,
+                train_group_size=args.train_group_size,
+                tag="training",
+            )
+        model.train_group_size = args.train_group_size
+    else:
+        raise ValueError(f"Train dataset type {args.train_dataset_type} not currently supported")
+    
     if args.val_dataset:
-        val_dataset = RankerDataset(
-            args.val_dataset,
-            target_model=model,
-            max_len=args.max_len,
-            max_label=args.max_label,
-            min_label=args.min_label,
-            tag="validation",
-        )
+        if "pointwise" == args.val_dataset_type:
+            val_dataset = PointwiseRankerDataset(
+                data_path=args.val_dataset,
+                label_key=args.val_label_key,
+                target_model=model,
+                max_len=args.max_len,
+                max_label=args.max_label,
+                min_label=args.min_label,
+                shuffle_rate=args.shuffle_rate,
+                tag="validation",
+            )
+        elif "grouped" == args.val_dataset_type:
+            val_dataset = GroupedRankerDataset(
+                data_path=args.val_dataset,
+                label_key=args.val_label_key,
+                target_model=model,
+                max_len=args.max_len,
+                shuffle_rate=args.shuffle_rate,
+                train_group_size=args.train_group_size,
+                tag="validation",
+            )
 
     num_workers = 10
     train_dataloader = DataLoader(
@@ -164,6 +203,7 @@ def main():
         num_workers=num_workers,
         pin_memory=False,
     )
+    
     val_dataloader = None
     if args.val_dataset:
         val_dataloader = DataLoader(
@@ -178,14 +218,25 @@ def main():
     optimizer = create_adamw_optimizer(
         model, lr=float(args.lr)
     )
-    assert 0 <= args.warmup_proportion < 1
+    assert 0 <= args.warmup_proportion <= 1
+    assert 0 <= args.stable_proportion <= 1
+    assert args.warmup_proportion + args.stable_proportion <= 1
     total_steps = (
         len(train_dataloader) * args.epochs
     ) // accelerator.gradient_state.num_steps
-    lr_scheduler = get_cosine_schedule_with_warmup(
+    num_warmup_steps = int(args.warmup_proportion * total_steps)
+    num_stable_steps = int(args.stable_proportion * total_steps)
+    
+    # lr_scheduler = get_cosine_schedule_with_warmup(
+    #     optimizer=optimizer,
+    #     num_warmup_steps=num_warmup_steps,
+    #     num_training_steps=total_steps,
+    # )
+    lr_scheduler = get_wsd_schedule(
         optimizer=optimizer,
-        num_warmup_steps=int(args.warmup_proportion * total_steps),
-        num_training_steps=total_steps,
+        num_warmup_steps=num_warmup_steps,
+        num_stable_steps=num_stable_steps,
+        num_decay_steps=total_steps - num_warmup_steps - num_stable_steps
     )
 
 
@@ -217,7 +268,7 @@ def main():
     accelerator.print("Saving model ...")
     save_dir = args.output_dir + "/model"
     unwrapped_model = accelerator.unwrap_model(model)
-    unwrapped_model.save_pretrained(save_dir, safe_serialization=True)
+    unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
     model.tokenizer.save_pretrained(save_dir)
     accelerator.print("Saving Successfully!")
 

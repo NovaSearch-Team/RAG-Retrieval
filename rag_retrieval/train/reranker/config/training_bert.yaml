@@ -1,34 +1,53 @@
 # Model
-model_name_or_path: "./bge-reranker-m3-base"
+model_name_or_path: "BAAI/bge-reranker-v2-m3"
 model_type: "bert_encoder"
-num_labels: 1 # binary classification
-
-
-# Dataset
-train_dataset: "../../../example_data/t2rank_100.jsonl"
-val_dataset: "../../../example_data/t2rank_100.small.jsonl"
-max_label: 1
-min_label: 0
-max_len: 512 
+num_labels: 1
 query_format: "{}"
 document_format: "{}"
 
 
+## Pointwise Dataset
+# train_dataset: "../../../example_data/pointwise_reranker_train_data.jsonl"
+# train_dataset_type: "pointwise"
+# max_label: 2
+# min_label: 0
+# max_len: 512
+# shuffle_rate: 0.0
+# train_label_key: "label"
+# val_dataset: "../../../example_data/pointwise_reranker_eval_data.jsonl"
+# val_dataset_type: "pointwise"
+# val_label_key: "label"
+# loss_type: "pointwise_bce"  # "pointwise_bce" or "pointwise_mse"
+
+## Grouped Dataset
+train_dataset: "../../../example_data/grouped_reranker_train_data_listwise_label.jsonl"
+train_dataset_type: "grouped"
+train_label_key: "label"
+train_group_size: 10
+shuffle_rate: 0.0
+max_len: 512
+val_dataset: "../../../example_data/grouped_reranker_eval_data.jsonl"
+val_dataset_type: "grouped"
+val_label_key: "label"
+loss_type: "pairwise_ranknet"  # "pairwise_ranknet" or "listwise_ce"
+
+
 # Training
-output_dir: "./output/t2ranking_100_example"
+output_dir: "./output/bert"
+
+## Model Saving
 save_on_epoch_end: 1
 num_max_checkpoints: 5
 
-
 ## Hyperparameters
-loss_type: "point_ce"  # "point_ce" or "point_mse"
 epochs: 2
 lr: 5e-5
-batch_size: 96
-seed: 666
+batch_size: 8
+seed: 42
 warmup_proportion: 0.1
-gradient_accumulation_steps: 1
-mixed_precision: fp16 
+stable_proportion: 0.0
+gradient_accumulation_steps: 2
+mixed_precision: fp16
 
 ## Logging
 log_interval: 10

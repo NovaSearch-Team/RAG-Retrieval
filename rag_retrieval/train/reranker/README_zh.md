@@ -20,71 +20,80 @@ pip install -r requirements.txt
 
 在安装好依赖后，我们通过具体的示例来展示如何利用我们自己的数据来微调开源的排序模型 (BAAI/bge-reranker-v2-m3)，或者从 BERT 类模型 (hfl/chinese-roberta-wwm-ext) 以及 LLM 类模型 (Qwen/Qwen2.5-1.5B) 从零开始训练排序模型。与此同时，我们也支持将 LLM 类模型的排序能力蒸馏到较小的 BERT 模型中去。
 
-# 数据格式
 
-对于排序模型，我们支持如下的标准数据格式：
+## 数据加载
+
+我们提供两种数据集加载方式，用于支持不同类型的损失函数：
+
+### 单点数据加载
+
+单点数据集标准格式，示例见 [pointwise_reranker_train_data.jsonl](../../../example_data/pointwise_reranker_train_data.jsonl)：
 ```
-{"query": str, "pos": List[str], "neg":List[str], "pos_scores": List, "neg_scores": List}
+{"query": str, "content": str, "label": xx}
 ```
-- `pos` 为 query 下所有的正样本。(当蒸馏或者训练数据是多级标签时，也可以是正负样本)
-- `neg` 为 query 下所有的负样本。
-- `pos_scores` 为 query 下所有正样本对应的得分。(当蒸馏或者数据是多级标签时，也可以是正负样本的得分)
-- `neg_scores` 为 query 下所有负样本对应的得分。
+- `content` 是 query 所对应的文档实际内容。
+- `label` 表示通过人工标注（多级相关性标签: 0/1/2/..）或教师模型打分（0-1 之间的连续值分数）所分配的相关性标签，作为模型微调的监督信号。
 
 
-对于排序模型，支持以下几种数据进行微调：
+该配置下支持均方损失 `MSE` 和二分类交叉熵损失 `Binary Cross Entropy`，优化目标为单点 query-content 的绝对相关性判断。当相关性是多级标签时，通过设定 `max_label` 和 `min_label` ，数据集内部会自动将多级标签均匀放缩到 0-1 分数区间中。例如数据集中存在三级标签（0，1，2），经过放缩后，得到{ label 0: 0，label 1: 0.5，label 2: 1}。在预测时，模型最终的预测分数为模型输出的 logit，后续可以经过 sigmoid 归一化为 0-1 区间。用户可以利用 LLM 来得到相关性标签以进行蒸馏，在 [examples/distill_llm_to_bert_reranker](../../../examples/distill_llm_to_bert_reranker) 目录下可以找到用 LLM 进行相关性打分标注的示例代码。
 
-- 二分类数据：当标注数据中query和doc的相关性为二分类数据，即 label 只存在 0 和 1 时，可参考 [t2rank_100.jsonl](../../../example_data/t2rank_100.jsonl) 文件。
+完整配置信息如下：
 ```
-{"query": str, "pos": List[str], "neg":List[str]}
+train_dataset: "../../../example_data/pointwise_reranker_train_data.jsonl"
+train_dataset_type: "pointwise"
+max_label: 2
+min_label: 0
+max_len: 512
+shuffle_rate: 0.0
+val_dataset: "../../../example_data/pointwise_reranker_eval_data.jsonl"
+val_dataset_type: "pointwise"
+loss_type: "pointwise_bce"  # "pointwise_bce" or "pointwise_mse"
 ```
-对于这种数据，在训练中，我们采用二分类交叉熵损失 `Binary Cross Entropy`来进行训练。在默认情况下，我们会把 query 和正例组成 pair，分数为 1；query 和负例组成 pair，分数为 0。在预测时，模型最终的预测分数为模型输出的 logit，后续可以经过 sigmoid 归一化为 0-1 区间。
 
-- 多级标签数据：当标注数据中query和doc的相关性为多分类数据，即 label 为多级标签，（可能等于 0,1,2 等）,用户可以在pos_scores中指定相关性的级别。此时数据集内部会自动将离散的 label 均匀放缩到 0-1 分数区间中。例如数据集中存在三级标签（0，1，2），那么 label 0: 0，label 1: 0.5，label 2: 1
+### 分组数据加载
+
+分组数据集标准格式，示例见 [grouped_reranker_train_data_pointwise_label.jsonl](../../../example_data/grouped_reranker_train_data_pointwise_label.jsonl) & [grouped_reranker_train_data_listwise_label.jsonl](../../../example_data/grouped_reranker_train_data_listwise_label.jsonl)：
 ```
-{"query": str, "pos": List[str], "pos_scores": List[int|float]}
+{"query": str, "hits": [{"content": xxx, "label": xxx}, ...]}
 ```
-对于这种数据，用户在设置数据集参数的时候需要手动指定 max label 和 min label（初始条件下 max label 默认为 1，min label 默认为 0）。在训练中，我们采用均方损失 `MSE` 或者soft label 下的二分类交叉熵损失 `Binary Cross Entropy`来进行训练。
+- `hits` 为 query 下所有的文档样本，content 是文档实际内容。
+- `label` 表示通过人工标注（多级相关性标签: 0/1/2/..）或教师模型打分（不局限于0-1 之间的连续值分数，可以是一个列表式相对排序）所分配的相关性标签，作为模型微调的监督信号。示例数据如上所示。
 
-- 蒸馏数据：用户可以直接使用 `pos`（同时包含正样本和负样本）和 `pos_scores` 来构建数据集(`pos_scores` 为范围 0-1 的连续分数)，可参考 [t2rank_100.distill.standard.jsonl](../../../example_data/t2rank_100.distill.standard.jsonl) 文件。
+该配置下支持成对损失 `Pairwise RankNet Loss` 和交叉熵损失 `Listwise Cross Entropy`，优化目标为 query-list[content] 的相对相关性判断。`train_group_size` 指的是针对每个 query需要同时考虑多少个文档的相对相关性。如果原始文档数目数量不足，则我们会进行重复采样来达到 `train_group_size` 的数目。
+
+完整配置信息如下：
 ```
-{"query": str, "pos": List[str], "pos_scores": List[int|float]}
+train_dataset: "../../../example_data/grouped_reranker_train_data.jsonl"
+train_dataset_type: "grouped"
+train_group_size: 10
+shuffle_rate: 0.0
+max_len: 512
+val_dataset: "../../../example_data/grouped_reranker_eval_data.jsonl"
+val_dataset_type: "grouped"
+loss_type: "pairwise_ranknet"  # "pairwise_ranknet" or "listwise_ce"
 ```
-对于这种数据,在训练中，我们采用均方损失 `MSE` 或者soft label 下的二分类交叉熵损失 `Binary Cross Entropy`来进行训练。在 [examples/distill_llm_to_bert](../../../examples/distill_llm_to_bert) 目录下可以找到用 LLM 进行相关性打分标注的代码。
 
+## 训练
 
-# 训练
-
-#bert类模型训练, fsdp(ddp)
-
+BERT 类模型训练, fsdp(ddp)
 ```bash
 CUDA_VISIBLE_DEVICES="0,1" nohup accelerate launch \
 --config_file ../../../config/xlmroberta_default_config.yaml \
 train_reranker.py \
 --config config/training_bert.yaml \
->./logs/training_bert.log &
+> ./logs/training_bert.log &
 ```
 
-#bert类模型蒸馏, fsdp(ddp)
-
-```bash
-CUDA_VISIBLE_DEVICES="0,1" nohup accelerate launch \
---config_file ../../../config/xlmroberta_default_config.yaml \
-train_reranker.py \
---config config/distilling_bert.yaml \
->./logs/distilling_bert.log &
-```
-
-#llm model, deepspeed(zero1-2, not for zero3)
+LLM 类模型训练, deepspeed（仅适用于zero 1-2, zero 3 暂不适配【保存模型的时候有 bug】）
 ```bash
 CUDA_VISIBLE_DEVICES="0,1" nohup accelerate launch \
 --config_file ../../../config/deepspeed/deepspeed_zero1.yaml \
 train_reranker.py \
 --config config/training_llm.yaml \
->./logs/training_llm_deepspeed1.log &
+> ./logs/training_llm_deepspeed1.log &
 ```
 
-**参数解释**
+## **参数解释**
 
 多卡训练config_file:
 
@@ -107,10 +116,10 @@ train_reranker.py \
 - `max_len`：数据支持的最大输入长度
 
 数据集方面：
-- `train_dataset`：训练数据集，格式见上文
-- `val_dataset`：验证数据集，格式同训练集(如果没有，设置为空即可)
-- `max_label`：数据集中的最大 label，默认为 1
-- `min_label`：数据集中的最小 label，默认为 0
+- `train_dataset`：训练数据集，具体格式见上文
+- `val_dataset`：验证数据集，格式同训练集(如果没有，设置为 None 即可)
+- `max_label`：单点数据集中的最大 label，默认为 1
+- `min_label`：单点数据集中的最小 label，默认为 0
 
 训练方面：
 - `output_dir`：训练过程中保存的 checkpoint 和最终模型的目录
@@ -120,6 +129,7 @@ train_reranker.py \
 - `batch_size`：每个 batch 中 query-doc pair 对的数量
 - `seed`：设置统一种子，用于实验结果的复现
 - `warmup_proportion`：学习率预热步数占模型更新总步数的比例，如果设置为 0，那么不进行学习率预热，直接从设置的 `lr` 进行余弦衰退
+- `stable_proportion`：学习率稳定不变的步数占模型更新总步数的比例，默认是 0
 - `gradient_accumulation_steps`：梯度累积步数，模型实际的 batch_size 大小等于 `batch_size` * `gradient_accumulation_steps` * `num_of_GPUs`
 - `mixed_precision`：是否进行混合精度的训练，以降低显存的需求。混合精度训练通过在计算使用低精度，更新参数用高精度，来优化显存占用。并且 bf16（Brain Floating Point 16）可以有效降低 loss scaling 的异常情况，但该类型仅被部分硬件支持
 - `save_on_epoch_end`：是否在每一个 epoch 结束后都保存模型
@@ -128,7 +138,7 @@ train_reranker.py \
 - `log_with`：可视化工具，从 wandb 和 tensorboard 中选择
 
 模型参数：
-- `num_labels`：模型输出 logit 的数目，即为模型分类类别的个数
+- `num_labels`：模型输出 logit 的数目，即为模型分类类别的个数，一般默认设置为 1
 - 对于 LLM 用于判别式排序打分时，需要人工构造输入格式，由此引入下列参数
   - `query_format`, e.g. "query: {}"
   - `document_format`, e.g. "document: {}" 
@@ -173,8 +183,8 @@ reranker = LLMDecoder.from_pretrained(
     num_labels=1,  # binary classification
     query_format="query: {}",
     document_format="document: {}",
-    seq=" ",
-    special_token="</s>",
+    seq="\n",
+    special_token="\nrelevance",
 )
 reranker.model.to("cuda:0")
 reranker.eval()

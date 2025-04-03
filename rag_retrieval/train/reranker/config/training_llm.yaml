@@ -1,44 +1,58 @@
 # Model
-model_name_or_path: "./Qwen2.5-1.5B-Instruct/"
+model_name_or_path: "Qwen/Qwen2.5-1.5B"
 model_type: "llm_decoder"
 num_labels: 1
-
-
-# Dataset
-train_dataset: "../../../example_data/t2rank_100.jsonl"
-val_dataset: "../../../example_data/t2rank_100.small.jsonl"
-max_label: 1
-min_label: 0
-max_len: 1024
-
 query_format: "query: {}"
 document_format: "document: {}"
 seq: "\n"
-special_token: "</s>"
+special_token: "\nrelevance"
 
 
+## Pointwise Dataset
+# train_dataset: "../../../example_data/pointwise_reranker_train_data.jsonl"
+# train_dataset_type: "pointwise"
+# max_label: 2
+# min_label: 0
+# max_len: 512
+# shuffle_rate: 0.0
+# train_label_key: "label"
+# val_dataset: "../../../example_data/pointwise_reranker_eval_data.jsonl"
+# val_dataset_type: "pointwise"
+# val_label_key: "label"
+# loss_type: "pointwise_mse"  # "pointwise_bce" or "pointwise_mse"
+
+## Grouped Dataset
+train_dataset: "../../../example_data/grouped_reranker_train_data_listwise_label.jsonl"
+train_dataset_type: "grouped"
+train_label_key: "label"
+train_group_size: 10
+shuffle_rate: 0.0
+max_len: 512
+val_dataset: "../../../example_data/grouped_reranker_eval_data.jsonl"
+val_dataset_type: "grouped"
+val_label_key: "label"
+loss_type: "pairwise_ranknet"  # "pairwise_ranknet" or "listwise_ce"
 
 
 # Training
-output_dir: "./output/t2ranking_100_example_llm"
+output_dir: "./output/llm"
 
 ## Model Saving
-save_on_epoch_end: 1
-num_max_checkpoints: 5
+save_on_epoch_end: 0
+num_max_checkpoints: 2
 
 ## Hyperparameters
-loss_type: "point_ce"  # "point_ce" or "point_mse"
 epochs: 2
-lr: 5e-5
-batch_size: 12
-seed: 666
+lr: 1e-5
+batch_size: 2
+seed: 42
 warmup_proportion: 0.1
+stable_proportion: 0.5
 gradient_accumulation_steps: 2
-mixed_precision: bf16 
-
+mixed_precision: bf16
 
 ## Logging
-log_interval: 10
+log_interval: 1
 log_with: "wandb" # "wandb" or "tensorboard"
 
 
