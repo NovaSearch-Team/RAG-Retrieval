@@ -19,6 +19,7 @@ class Embedding(nn.Module):
         use_mrl=False,
         mrl_dims=[],
         temperature=0.02,
+        all_gather=False
     ):
         super().__init__()
 
@@ -27,6 +28,7 @@ class Embedding(nn.Module):
         self.temperature = temperature
         self.use_mrl = use_mrl
         self.mrl_dims = mrl_dims
+        self.all_gather = all_gather
 
     def get_embedding(self, input_ids, attention_mask):
 
@@ -45,26 +47,76 @@ class Embedding(nn.Module):
         neg_doc_input_ids=None,  # [batch_size*neg_nums,seq_len]
         neg_doc_attention_mask=None,  # [batch_size*neg_nums,seq_len]
         scores=None,  # [batch_size]
+        accelerator=None,
     ):
         query_embeddings = self.get_embedding(query_input_ids, query_attention_mask)
 
         res_dict = {}
-        res_dict['query_embeddings'] = query_embeddings
 
         # only pos pair loss
         if pos_doc_input_ids is not None and neg_doc_input_ids is None and scores is None:
 
             pos_doc_embeddings = self.get_embedding(pos_doc_input_ids, pos_doc_attention_mask)
 
-            if self.use_mrl:
-                loss = torch.tensor(0.0, device=query_embeddings.device)
-                for num_dim in self.mrl_dims:
-                    query_emb, pos_doc_emb = query_embeddings[..., :num_dim], pos_doc_embeddings[..., :num_dim]
-                    loss += self.pair_inbatch_softmax_loss(query_emb, pos_doc_emb)
-                loss = loss / len(self.mrl_dims)
+            if self.all_gather and accelerator is not None:
+                B, _ = query_embeddings.shape
+                rank = accelerator.process_index
+                world_size = accelerator.num_processes
+                B_total = B * world_size
+                all_doc_emb = accelerator.gather(pos_doc_embeddings) # [B_total, D]
+                labels = torch.arange(B, device=query_embeddings.device) + rank * B  # [B]
+                neg_mask = torch.ones((B, B_total), dtype=torch.bool, device=query_embeddings.device)
+                neg_mask[torch.arange(B), labels] = False
+                
+                if self.use_mrl:
+                    loss = torch.tensor(0.0, device=query_embeddings.device)
+                    accuracy = 0.0
+                    for num_dim in self.mrl_dims:
+                        cur_query_emb = F.normalize(query_embeddings[..., :num_dim], p=2, dim=-1)
+                        cur_doc_emb = F.normalize(pos_doc_embeddings[..., :num_dim], p=2, dim=-1)
+                        pos_sim = torch.sum(cur_query_emb * cur_doc_emb, dim=-1, keepdim=True) 
+                        cur_all_doc_emb = F.normalize(all_doc_emb[..., :num_dim], p=2, dim=-1)
+                        all_neg_sim = cur_query_emb @ cur_all_doc_emb.T  # [B, B_total] 
+                        neg_sim_filtered = all_neg_sim.masked_select(neg_mask).view(B, -1)  # [B, B_total - 1]
+                        logits = torch.cat([pos_sim, neg_sim_filtered], dim=1)  # [B, 1 + B_total - 1]
+                        labels = torch.zeros(B, dtype=torch.long, device=query_embeddings.device)
+                        loss += F.cross_entropy(logits / self.temperature, labels)
+                        _, predicted = torch.max(logits, 1)
+                        correct = (predicted == labels).sum().item()
+                        accuracy += correct / labels.size(0)
+                    loss = loss / len(self.mrl_dims)
+                    accuracy = accuracy / len(self.mrl_dims)
+                else:
+                    query_embeddings = F.normalize(query_embeddings, p=2, dim=-1)
+                    pos_doc_embeddings = F.normalize(pos_doc_embeddings, p=2, dim=-1)
+                    pos_sim = torch.sum(query_embeddings * pos_doc_embeddings, dim=-1, keepdim=True)
+                    all_doc_emb = F.normalize(all_doc_emb, p=2, dim=-1)
+                    all_neg_sim = query_embeddings @ all_doc_emb.T  # [B, B_total]
+                    neg_sim_filtered = all_neg_sim.masked_select(neg_mask).view(B, -1)  # [B, B_total - 1]
+                    logits = torch.cat([pos_sim, neg_sim_filtered], dim=1)  # [B, 1 + B_total - 1]
+                    labels = torch.zeros(B, dtype=torch.long, device=query_embeddings.device)
+                    
+                    loss = F.cross_entropy(logits / self.temperature, labels)
+                    _, predicted = torch.max(logits, 1)
+                    accuracy = (predicted == labels).sum().item() / labels.size(0)
+
+                res_dict['loss'] = loss
+                res_dict['accuracy'] = accuracy
+            
             else:
-                loss = self.pair_inbatch_softmax_loss(query_embeddings, pos_doc_embeddings)
-            res_dict['loss'] = loss
+                if self.use_mrl:
+                    loss = torch.tensor(0.0, device=query_embeddings.device)
+                    accuracy = 0.0
+                    for num_dim in self.mrl_dims:
+                        query_emb, pos_doc_emb = query_embeddings[..., :num_dim], pos_doc_embeddings[..., :num_dim]
+                        cur_loss, cur_accuracy = self.pair_inbatch_softmax_loss(query_emb, pos_doc_emb, require_acc=True)
+                        loss += cur_loss
+                        accuracy += cur_accuracy
+                    loss = loss / len(self.mrl_dims)
+                    accuracy = accuracy / len(self.mrl_dims)
+                else:
+                    loss, accuracy = self.pair_inbatch_softmax_loss(query_embeddings, pos_doc_embeddings, require_acc=True)
+                res_dict['loss'], res_dict['accuracy'] = loss, accuracy
 
         # both pos and neg triplet loss
         elif pos_doc_input_ids is not None and neg_doc_input_ids is not None:
@@ -96,6 +148,9 @@ class Embedding(nn.Module):
             else:
                 loss = self.pair_kl_loss(query_embeddings, pos_doc_embeddings, scores)
             res_dict['loss'] = loss
+        
+        else:
+            res_dict['query_embeddings'] = query_embeddings
 
         return res_dict
 
@@ -103,6 +158,7 @@ class Embedding(nn.Module):
         self,
         query_embeddings,
         pos_doc_embeddings,
+        require_acc=False
     ):
 
         loss_fct = nn.CrossEntropyLoss()
@@ -117,6 +173,11 @@ class Embedding(nn.Module):
         # [batch_size]
         labels = torch.arange(query_embeddings.size(0), device=query_embeddings.device, dtype=torch.long)
         loss = loss_fct(sim_matrix, labels)
+        if require_acc:
+            _, predicted = torch.max(sim_matrix, 1)
+            correct = (predicted == labels).sum().item()
+            accuracy = correct / labels.size(0)
+            return loss, accuracy
         return loss
 
     def triplet_inbatch_softmax_loss(
@@ -240,10 +301,13 @@ class Embedding(nn.Module):
     def save_pretrained(
         self,
         save_dir,
-        safe_serialization = False
+        safe_serialization = False,
+        accelerator=None
     ):
-
-        self.model.save(save_dir, safe_serialization=safe_serialization)
+        if accelerator is None:
+            self.model.save(save_dir, safe_serialization=safe_serialization)
+        else:
+            accelerator.save_model(self.model, save_dir, safe_serialization=safe_serialization)
 
     @classmethod
     def from_pretrained(
@@ -252,8 +316,10 @@ class Embedding(nn.Module):
         use_mrl=False,
         mrl_dims=[],
         temperature=0.02,
+        all_gather=False,
+        device=None
     ):
-        sentence_model = SentenceTransformer(model_name_or_path, trust_remote_code=True)
+        sentence_model = SentenceTransformer(model_name_or_path, trust_remote_code=True, device=device)
 
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 

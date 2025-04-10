@@ -35,7 +35,6 @@ def create_adamw_optimizer(
 
 
 def parse_args():
-    import yaml
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str)
@@ -77,6 +76,7 @@ def parse_args():
 
     parser.add_argument('--use_mrl', action='store_true', help='if use mrl loss')
     parser.add_argument('--mrl_dims', type=str, help='list of mrl dims', default='128, 256, 512, 768, 1024, 1280, 1536, 1792')
+    parser.add_argument('--all_gather', action='store_true', help='if use all_gather')
 
     args = parser.parse_args()
 
@@ -117,13 +117,15 @@ def main():
         mrl_dims = []
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
-
+    device = accelerator.device
     if args.train_type=="train":
         model = Embedding.from_pretrained(
             model_name_or_path=args.model_name_or_path,
             temperature=args.temperature,
             use_mrl=args.use_mrl,
-            mrl_dims=mrl_dims
+            mrl_dims=mrl_dims,
+            all_gather=args.all_gather,
+            device=device
         )
         train_datast = EmbeddingDataset(
             train_data_path=args.train_dataset,
@@ -217,7 +219,7 @@ def main():
     save_dir = args.output_dir + '/model'
 
     unwrapped_model = accelerator.unwrap_model(model)
-    unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
+    unwrapped_model.save_pretrained(save_dir, safe_serialization=True, accelerator=accelerator)
     tokenizer.save_pretrained(save_dir)
 
 

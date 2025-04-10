@@ -82,6 +82,8 @@ class Trainer:
                         'avg_loss': self.train_loss_tracker.loss,
                         'current_loss': batch_output['loss'],
                     }
+                    if 'accuracy' in batch_output:
+                        log_dic['accuracy'] = batch_output['accuracy']
                     if 'cosine_loss' in batch_output:
                         log_dic['current_cosine_loss'] = batch_output['cosine_loss']
                     if 'similarity_loss' in batch_output:
@@ -94,21 +96,23 @@ class Trainer:
                         step=self.current_step,
                     )
                 if self.eval_steps and batch_index % self.eval_steps == 0 and self.validation_dataloader:
-                    validation_loss = evaluate(
+                    validation_loss, acc = evaluate(
                         self.model,
                         self.validation_dataloader,
                         self.validation_loss_tracker,
                     )
-                    validation_metrics = self.add_prefix({'loss': validation_loss}, 'validation')
-                    self.accelerator.print(f'Step {self.current_step} Validation loss: {validation_loss:.6f}')
+                    validation_metrics = self.add_prefix({'loss': validation_loss, 'accuracy': acc}, 'validation')
+                    self.accelerator.print(f'Step {self.current_step} Validation loss: {validation_loss:.6f} Accuracy: {acc:.6f}')
                     self.accelerator.log(validation_metrics, step=self.current_step)
 
                 if self.save_steps and self.current_step % self.save_steps == 0:
                     # self.accelerator.save_state(self.get_checkpoint_dir())
-                    if self.accelerator.is_local_main_process:
+                    if self.accelerator.is_main_process:
                         save_dir=self.get_checkpoint_dir(self.current_step, is_step=True)  # TODO: 改为按照step保存
                         unwrapped_model = self.accelerator.unwrap_model(self.model)
-                        unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
+                        unwrapped_model.save_pretrained(save_dir,
+                                                        safe_serialization=True,
+                                                        accelerator=self.accelerator)
                         # self.accelerator.save_model(self.model, save_dir)
                         self.tokenizer.save_pretrained(save_dir)
                         # self.accelerator.save_model(self.model, save_dir)
@@ -120,24 +124,26 @@ class Trainer:
             self.progress_bar.on_epoch_end()
 
             if self.validation_dataloader:
-                validation_loss = evaluate(
+                validation_loss, acc = evaluate(
                     self.model,
                     self.validation_dataloader,
                     self.validation_loss_tracker,
                 )
-                validation_metrics = self.add_prefix({'loss': validation_loss}, 'validation')
-                self.accelerator.print(f'Epoch {current_epoch} Validation loss: {validation_loss:.6f}')
+                validation_metrics = self.add_prefix({'loss': validation_loss, 'accuracy': acc}, 'validation')
+                self.accelerator.print(f'Epoch {current_epoch} Validation loss: {validation_loss:.6f} Accuracy: {acc:.6f}')
                 self.accelerator.log(validation_metrics, step=current_epoch)
 
             if self.save_on_epoch_end:
                 # self.accelerator.save_state(self.get_checkpoint_dir())
 
-                if self.accelerator.is_local_main_process:
+                if self.accelerator.is_main_process:
                     save_dir=self.get_checkpoint_dir(current_epoch)
                     print(save_dir)
 
                     unwrapped_model = self.accelerator.unwrap_model(self.model)
-                    unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
+                    unwrapped_model.save_pretrained(save_dir,
+                                                    safe_serialization=True,
+                                                    accelerator=self.accelerator)
                     # self.accelerator.save_model(self.model, save_dir)
                     self.tokenizer.save_pretrained(save_dir)
                     # self.accelerator.save_model(self.model, save_dir)
@@ -182,16 +188,21 @@ def evaluate(
     model: torch.nn.Module,
     dataloader: DataLoader,
     loss_tracker: LossTracker | None = None,
+    accelerator: Accelerator | None = None,
 ):
     model.eval()
     loss_tracker = loss_tracker or LossTracker()
+    accuracy = 0
     for batch in dataloader:
         with torch.inference_mode():
-            batch_output = model(**batch)
+            batch_output = model(**batch, accelerator=accelerator)
             loss_tracker.update(batch_output['loss'])
+            if 'accuracy' in batch_output:
+                accuracy += batch_output['accuracy']
+    accuracy = accuracy / len(dataloader)
     loss = loss_tracker.loss
     loss_tracker.on_epoch_end()
-    return loss
+    return loss, accuracy
 
 
 class DummyProgressBar:
