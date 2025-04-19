@@ -82,28 +82,28 @@ class Trainer:
                         'avg_loss': self.train_loss_tracker.loss,
                         'current_loss': batch_output['loss'],
                     }
-                    if 'accuracy' in batch_output:
-                        log_dic['accuracy'] = batch_output['accuracy']
                     if 'cosine_loss' in batch_output:
                         log_dic['current_cosine_loss'] = batch_output['cosine_loss']
                     if 'similarity_loss' in batch_output:
                         log_dic['current_similarity_loss'] = batch_output['similarity_loss']
                     if 'triplet_loss' in batch_output:
-                        log_dic['current_triplet_loss'] = batch_output['triplet_loss']   
+                        log_dic['current_triplet_loss'] = batch_output['triplet_loss'] 
+                    for key in batch_output:
+                        if key.startswith('accuracy'):
+                            log_dic[key] = batch_output[key]
 
                     self.log_metrics(
                         log_dic,
                         step=self.current_step,
                     )
                 if self.eval_steps and batch_index % self.eval_steps == 0 and self.validation_dataloader:
-                    validation_loss, acc = evaluate(
+                    validation_dict = evaluate(
                         self.model,
                         self.validation_dataloader,
                         self.validation_loss_tracker,
                         self.accelerator,
                     )
-                    validation_metrics = self.add_prefix({'loss': validation_loss, 'accuracy': acc}, 'validation')
-                    self.accelerator.print(f'Step {self.current_step} Validation loss: {validation_loss:.6f} Accuracy: {acc:.6f}')
+                    validation_metrics = self.add_prefix(validation_dict, 'validation')
                     self.accelerator.log(validation_metrics, step=self.current_step)
 
                 if self.save_steps and self.current_step % self.save_steps == 0:
@@ -125,15 +125,14 @@ class Trainer:
             self.progress_bar.on_epoch_end()
 
             if self.validation_dataloader:
-                validation_loss, acc = evaluate(
+                validation_dict = evaluate(
                     self.model,
                     self.validation_dataloader,
                     self.validation_loss_tracker,
                     self.accelerator,
                 )
-                validation_metrics = self.add_prefix({'loss': validation_loss, 'accuracy': acc}, 'validation')
-                self.accelerator.print(f'Epoch {current_epoch} Validation loss: {validation_loss:.6f} Accuracy: {acc:.6f}')
-                self.accelerator.log(validation_metrics, step=current_epoch)
+                validation_metrics = self.add_prefix(validation_dict, 'validation')
+                self.accelerator.log(validation_metrics, step=self.current_step)
 
             if self.save_on_epoch_end:
                 # self.accelerator.save_state(self.get_checkpoint_dir())
@@ -194,17 +193,24 @@ def evaluate(
 ):
     model.eval()
     loss_tracker = loss_tracker or LossTracker()
-    accuracy = 0
+    validation_dict = {}
     for batch in dataloader:
         with torch.inference_mode():
             batch_output = model(**batch, accelerator=accelerator)
             loss_tracker.update(batch_output['loss'])
-            if 'accuracy' in batch_output:
-                accuracy += batch_output['accuracy']
-    accuracy = accuracy / len(dataloader)
+            for key in batch_output:
+                if key.startswith('accuracy'):
+                    if key not in validation_dict:
+                        validation_dict[key] = batch_output[key]
+                    else:
+                        validation_dict[key] += batch_output[key]
+    for key in validation_dict:
+        if key.startswith('accuracy'):
+            validation_dict[key] = validation_dict[key] / len(dataloader)
     loss = loss_tracker.loss
+    validation_dict['loss'] = loss
     loss_tracker.on_epoch_end()
-    return loss, accuracy
+    return validation_dict
 
 
 class DummyProgressBar:
