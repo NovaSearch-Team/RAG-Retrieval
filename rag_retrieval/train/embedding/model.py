@@ -2,13 +2,21 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import trange
-
+import os
+import json
+import sys
+from pathlib import Path
+import shutil
+import sentence_transformers
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import models
+import transformers
 from functools import cached_property
 from transformers import AutoTokenizer
 import torch.nn.functional as F
 import subprocess
+from transformers.dynamic_module_utils import get_relative_import_files
+from utils import fix_safetensors, fix_sub_safetensors
 
 
 class Embedding(nn.Module):
@@ -19,16 +27,20 @@ class Embedding(nn.Module):
         use_mrl=False,
         mrl_dims=[],
         temperature=0.02,
-        all_gather=False
+        all_gather=False,
+        original_keys=None,
+        mapping_rule=None,
     ):
         super().__init__()
-
+        
         self.model = sentence_model
         self.tokenizer = tokenizer
         self.temperature = temperature
         self.use_mrl = use_mrl
         self.mrl_dims = mrl_dims
         self.all_gather = all_gather
+        self.original_keys = original_keys
+        self.mapping_rule = mapping_rule
 
     def get_embedding(self, input_ids, attention_mask):
 
@@ -300,13 +312,71 @@ class Embedding(nn.Module):
     def save_pretrained(
         self,
         save_dir,
-        safe_serialization = False,
-        accelerator=None
+        safe_serialization=False,
+        accelerator=None,
     ):
         if accelerator is None:
-            self.model.save(save_dir, safe_serialization=safe_serialization)
+            self.model.save(save_dir, safe_serialization=safe_serialization) # type:ignore
         else:
-            accelerator.save_model(self.model, save_dir, safe_serialization=safe_serialization)
+            accelerator.save_model(self.model, save_dir,
+                                   safe_serialization=safe_serialization)
+            modules_config = []
+            self.model._model_config["__version__"] = {
+                "sentence_transformers": sentence_transformers.__version__,
+                "transformers": transformers.__version__,
+                "pytorch": torch.__version__,
+            }
+
+            with open(os.path.join(save_dir, "config_sentence_transformers.json"), "w") as fOut:
+                config = self.model._model_config.copy()
+                config["prompts"] = self.model.prompts
+                config["default_prompt_name"] = self.model.default_prompt_name
+                config["similarity_fn_name"] = self.model.similarity_fn_name
+                json.dump(config, fOut, indent=2)
+
+            for idx, name in enumerate(self.model._modules):
+                module = self.model._modules[name]
+                if idx == 0 and hasattr(module, "save_in_root"):  # Save first module in the main folder
+                    model_path = save_dir + "/"
+                else:
+                    model_path = os.path.join(save_dir, str(idx) + "_" + type(module).__name__)
+                
+                if idx == 0 and hasattr(module, "auto_model"):
+                    module.auto_model.config.to_json_file(os.path.join(model_path, "config.json"))
+                    if hasattr(module, 'get_config_dict'):
+                        with open(os.path.join(model_path, "sentence_bert_config.json"), "w") as fOut:
+                            json.dump(module.get_config_dict(), fOut, indent=2)
+
+                else:
+                    os.makedirs(model_path, exist_ok=True)
+                    if hasattr(module, 'get_config_dict'):
+                        with open(os.path.join(model_path, "config.json"), "w") as fOut:
+                            json.dump(module.get_config_dict(), fOut, indent=2)
+
+                class_ref = type(module).__module__
+                if class_ref.startswith("transformers_modules."):
+                    class_file = sys.modules[class_ref].__file__
+
+                    dest_file = Path(model_path) / (Path(class_file).name)
+                    shutil.copy(class_file, dest_file)
+
+                    for needed_file in get_relative_import_files(class_file):
+                        dest_file = Path(model_path) / (Path(needed_file).name)
+                        shutil.copy(needed_file, dest_file)
+                    class_ref = f"{class_ref.split('.')[-1]}.{type(module).__name__}"
+                elif not class_ref.startswith("sentence_transformers."):
+                    class_ref = f"{class_ref}.{type(module).__name__}"
+
+                module_config = {"idx": idx, "name": name, "path": os.path.basename(model_path), "type": class_ref}
+                if self.model.module_kwargs and name in self.model.module_kwargs and (module_kwargs := self.model.module_kwargs[name]):
+                    module_config["kwargs"] = module_kwargs
+                modules_config.append(module_config)
+
+            with open(os.path.join(save_dir, "modules.json"), "w") as fOut:
+                json.dump(modules_config, fOut, indent=2)
+        if safe_serialization:
+            fix_sub_safetensors(save_dir)
+            fix_safetensors(save_dir, self.original_keys, self.mapping_rule)
 
     @classmethod
     def from_pretrained(
@@ -316,7 +386,9 @@ class Embedding(nn.Module):
         mrl_dims=[],
         temperature=0.02,
         all_gather=False,
-        device=None
+        device=None,
+        original_keys=None,
+        mapping_rule=None,
     ):
         sentence_model = SentenceTransformer(model_name_or_path, trust_remote_code=True, device=device)
 
@@ -346,7 +418,7 @@ class Embedding(nn.Module):
                 sentence_model._modules[str(idx)] = scaling_layer
             print(sentence_model)
 
-        embedding = cls(sentence_model, tokenizer, use_mrl, mrl_dims, temperature)
+        embedding = cls(sentence_model, tokenizer, use_mrl, mrl_dims, temperature, all_gather, original_keys, mapping_rule)
 
         return embedding
 
