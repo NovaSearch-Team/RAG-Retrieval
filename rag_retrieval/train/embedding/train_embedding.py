@@ -11,6 +11,7 @@ from data import EmbeddingDataset, EmbeddingDistillDataset
 from torch.utils.data import DataLoader
 from trainer import Trainer
 from accelerate import Accelerator
+from utils import *
 
 
 def create_adamw_optimizer(
@@ -74,6 +75,7 @@ def parse_args():
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--eval_steps", type=int, default=None)
     parser.add_argument("--save_steps", type=int, default=None)
+    parser.add_argument("--safe_serialization", action='store_false', help='if use safetensors')
 
     parser.add_argument('--use_mrl', action='store_true', help='if use mrl loss')
     parser.add_argument('--mrl_dims', type=str, help='list of mrl dims', default='128, 256, 512, 768, 1024, 1280, 1536, 1792')
@@ -119,6 +121,7 @@ def main():
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     device = accelerator.device
+    model_keys = get_safetensors_keys(args.model_name_or_path) if args.safe_serialization else None
     if args.train_type=="train":
         model = Embedding.from_pretrained(
             model_name_or_path=args.model_name_or_path,
@@ -126,7 +129,9 @@ def main():
             use_mrl=args.use_mrl,
             mrl_dims=mrl_dims,
             all_gather=args.all_gather,
-            device=device
+            device=device,
+            original_keys=model_keys,
+            mapping_rule=None
         )
         train_datast = EmbeddingDataset(
             train_data_path=args.train_dataset,
@@ -209,6 +214,7 @@ def main():
         eval_steps=args.eval_steps * accelerator.gradient_state.num_steps if args.eval_steps else args.eval_steps,
         save_steps=args.save_steps * accelerator.gradient_state.num_steps if args.save_steps else args.save_steps,
         save_on_epoch_end=args.save_on_epoch_end,
+		safe_serialization=args.safe_serialization,
         tokenizer=tokenizer,
     )
 
@@ -220,7 +226,7 @@ def main():
     save_dir = args.output_dir + '/model'
 
     unwrapped_model = accelerator.unwrap_model(model)
-    unwrapped_model.save_pretrained(save_dir, safe_serialization=True, accelerator=accelerator)
+    unwrapped_model.save_pretrained(save_dir, safe_serialization=args.safe_serialization, accelerator=accelerator)
     tokenizer.save_pretrained(save_dir)
 
 
