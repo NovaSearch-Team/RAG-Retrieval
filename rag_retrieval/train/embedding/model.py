@@ -83,9 +83,8 @@ class Embedding(nn.Module):
                         loss += F.cross_entropy(logits / self.temperature, labels)
                         _, predicted = torch.max(logits, 1)
                         correct = (predicted == labels).sum().item()
-                        accuracy += correct / labels.size(0)
+                        res_dict['accuracy_dim_{}'.format(num_dim)] = correct / labels.size(0)
                     loss = loss / len(self.mrl_dims)
-                    accuracy = accuracy / len(self.mrl_dims)
                 else:
                     query_embeddings = F.normalize(query_embeddings, p=2, dim=-1)
                     pos_doc_embeddings = F.normalize(pos_doc_embeddings, p=2, dim=-1)
@@ -99,9 +98,8 @@ class Embedding(nn.Module):
                     loss = F.cross_entropy(logits / self.temperature, labels)
                     _, predicted = torch.max(logits, 1)
                     accuracy = (predicted == labels).sum().item() / labels.size(0)
-
+                    res_dict['accuracy'] = accuracy
                 res_dict['loss'] = loss
-                res_dict['accuracy'] = accuracy
             
             else:
                 if self.use_mrl:
@@ -113,10 +111,11 @@ class Embedding(nn.Module):
                         loss += cur_loss
                         accuracy += cur_accuracy
                     loss = loss / len(self.mrl_dims)
-                    accuracy = accuracy / len(self.mrl_dims)
+                    res_dict['accuracy_dim_{}'.format(num_dim)] = cur_accuracy
                 else:
                     loss, accuracy = self.pair_inbatch_softmax_loss(query_embeddings, pos_doc_embeddings, require_acc=True)
-                res_dict['loss'], res_dict['accuracy'] = loss, accuracy
+                    res_dict['accuracy'] = accuracy
+                res_dict['loss'] = loss
 
         # both pos and neg triplet loss
         elif pos_doc_input_ids is not None and neg_doc_input_ids is not None:
