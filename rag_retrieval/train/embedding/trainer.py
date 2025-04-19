@@ -32,6 +32,7 @@ class Trainer:
         eval_steps: int | None = 50,
         save_steps: int | None = None,
         save_on_epoch_end: bool = True,
+        safe_serialization: bool = True,
         tokenizer,
     ):
         self.model = model
@@ -45,6 +46,7 @@ class Trainer:
         self.eval_steps = eval_steps
         self.save_steps = save_steps
         self.save_on_epoch_end = save_on_epoch_end
+        self.safe_serialization = safe_serialization
         self.tokenizer = tokenizer
 
         self.train_loss_tracker = LossTracker()
@@ -112,7 +114,7 @@ class Trainer:
                         save_dir=self.get_checkpoint_dir(self.current_step, is_step=True)  # TODO: 改为按照step保存
                         unwrapped_model = self.accelerator.unwrap_model(self.model)
                         unwrapped_model.save_pretrained(save_dir,
-                                                        safe_serialization=True,
+                                                        safe_serialization=self.safe_serialization,
                                                         accelerator=self.accelerator)
                         # self.accelerator.save_model(self.model, save_dir)
                         self.tokenizer.save_pretrained(save_dir)
@@ -143,7 +145,7 @@ class Trainer:
 
                     unwrapped_model = self.accelerator.unwrap_model(self.model)
                     unwrapped_model.save_pretrained(save_dir,
-                                                    safe_serialization=True,
+                                                    safe_serialization=self.safe_serialization,
                                                     accelerator=self.accelerator)
                     # self.accelerator.save_model(self.model, save_dir)
                     self.tokenizer.save_pretrained(save_dir)
