@@ -143,21 +143,45 @@ class Embedding(nn.Module):
             pos_doc_embeddings = self.get_embedding(pos_doc_input_ids, pos_doc_attention_mask)
             neg_doc_embeddings = self.get_embedding(neg_doc_input_ids, neg_doc_attention_mask)
 
-            if self.use_mrl:
-                loss = torch.tensor(0.0, device=query_embeddings.device)
-                for num_dim in self.mrl_dims:
-                    query_emb, pos_doc_emb, neg_doc_emb = query_embeddings[..., :num_dim], pos_doc_embeddings[..., :num_dim], neg_doc_embeddings[...,
-                                                                                                                                                :num_dim]
-                    cur_loss, cur_accuracy = self.triplet_inbatch_softmax_loss(
-                        query_emb, pos_doc_emb, neg_doc_emb, require_acc=True)
-                    loss += cur_loss
-                    res_dict['accuracy_dim_{}'.format(num_dim)] = cur_accuracy
-                loss = loss / len(self.mrl_dims)
+            if self.all_gather and accelerator is not None:
+                B, _ = query_embeddings.shape
+                rank = accelerator.process_index
+                world_size = accelerator.num_processes
+                B_total = B * world_size
+                all_doc_embedding = accelerator.gather(
+                    neg_doc_embeddings)  # [B_total * neg_nums, D]
+                if self.use_mrl:
+                    loss = torch.tensor(0.0, device=query_embeddings.device)
+                    for num_dim in self.mrl_dims:
+                        query_emb, pos_doc_emb, all_doc_emb = query_embeddings[..., :num_dim], pos_doc_embeddings[..., :num_dim], all_doc_embedding[...,
+                                                                                                                                                    :num_dim]
+                        cur_loss, cur_accuracy = self.triplet_inbatch_softmax_loss(
+                            query_emb, pos_doc_emb, all_doc_emb, require_acc=True)
+                        loss += cur_loss
+                        res_dict['accuracy_dim_{}'.format(num_dim)] = cur_accuracy
+                    loss = loss / len(self.mrl_dims)
+                else:
+                    loss, accuracy = self.triplet_inbatch_softmax_loss(
+                        query_embeddings, pos_doc_embeddings, all_doc_emb, require_acc=True)
+                    res_dict['accuracy'] = accuracy
+                res_dict['loss'] = loss
+            
             else:
-                loss, accuracy = self.triplet_inbatch_softmax_loss(
-                    query_embeddings, pos_doc_embeddings, neg_doc_embeddings, require_acc=True)
-                res_dict['accuracy'] = accuracy
-            res_dict['loss'] = loss
+                if self.use_mrl:
+                    loss = torch.tensor(0.0, device=query_embeddings.device)
+                    for num_dim in self.mrl_dims:
+                        query_emb, pos_doc_emb, neg_doc_emb = query_embeddings[..., :num_dim], pos_doc_embeddings[..., :num_dim], neg_doc_embeddings[...,
+                                                                                                                                                    :num_dim]
+                        cur_loss, cur_accuracy = self.triplet_inbatch_softmax_loss(
+                            query_emb, pos_doc_emb, neg_doc_emb, require_acc=True)
+                        loss += cur_loss
+                        res_dict['accuracy_dim_{}'.format(num_dim)] = cur_accuracy
+                    loss = loss / len(self.mrl_dims)
+                else:
+                    loss, accuracy = self.triplet_inbatch_softmax_loss(
+                        query_embeddings, pos_doc_embeddings, neg_doc_embeddings, require_acc=True)
+                    res_dict['accuracy'] = accuracy
+                res_dict['loss'] = loss
 
         elif pos_doc_input_ids is not None and scores is not None:
 
