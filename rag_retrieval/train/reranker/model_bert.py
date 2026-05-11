@@ -76,7 +76,10 @@ class CrossEncoder(nn.Module):
             new_sentences_pairs.append([new_query, new_document])
         assert len(new_sentences_pairs) == len(sentences_pairs)
 
-        tokens = self.tokenizer.batch_encode_plus(
+        # `batch_encode_plus` was removed from transformers tokenizers; the
+        # supported API for a batched call is the tokenizer's __call__
+        # (which automatically picks the batched path when given a list).
+        tokens = self.tokenizer(
             new_sentences_pairs,
             add_special_tokens=True,
             padding="longest",
