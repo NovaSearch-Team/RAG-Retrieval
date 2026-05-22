@@ -190,7 +190,7 @@ class DistillEmbedding(nn.Module):
     def from_pretrained(
         cls,
         model_name_or_path,
-        teacher_emebedding_dim=None,
+        teacher_embedding_dim=None,
         mrl_dims=[],
     ):
         sentence_model = SentenceTransformer(model_name_or_path,trust_remote_code=True)
@@ -203,7 +203,7 @@ class DistillEmbedding(nn.Module):
         print('init scaling_layer weight.')
         idx = len(sentence_model._modules.keys())
         in_features = sentence_model.get_sentence_embedding_dimension()
-        scaling_layer = models.Dense(in_features, teacher_emebedding_dim, bias=True, activation_function=torch.nn.modules.linear.Identity())
+        scaling_layer = models.Dense(in_features, teacher_embedding_dim, bias=True, activation_function=torch.nn.modules.linear.Identity())
         sentence_model._modules[str(idx)] = scaling_layer
         print(sentence_model)
 

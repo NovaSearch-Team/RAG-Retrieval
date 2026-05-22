@@ -7,7 +7,7 @@ train_type: "distill"
 train_dataset: "../../../example_data/t2rank_100.jsonl.text.jsonl"
 train_dataset_vec: "../../../example_data/t2rank_100.embedding.conan.xiaobu.mmap"
 query_max_len: 512
-teacher_emebedding_dim: 3584
+teacher_embedding_dim: 3584
 shuffle: false
 
 
