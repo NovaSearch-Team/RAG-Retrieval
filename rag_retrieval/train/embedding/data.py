@@ -145,7 +145,7 @@ class EmbeddingDistillDataset(Dataset):
         train_data_path,
         train_dataset_vec_path,
         tokenizer,
-        teatch_emebedding_dim,
+        teacher_embedding_dim,
         query_max_len=512,
         data_type="distill",
     ):
@@ -155,7 +155,7 @@ class EmbeddingDistillDataset(Dataset):
 
         print(len(self.train_data_text))
         self.train_data_embedding_mmap = np.memmap(train_dataset_vec_path, 
-            dtype='float32', mode='r', shape=(len(self.train_data_text), teatch_emebedding_dim))
+            dtype='float32', mode='r', shape=(len(self.train_data_text), teacher_embedding_dim))
         
         assert self.train_data_embedding_mmap[len(self.train_data_text)-1] is not None
 
@@ -224,7 +224,7 @@ def test_EmbeddingDistillDataset():
     train_dataset_vec_path="../../../example_data/t2rank_100.embedding.conan.xiaobu.mmap"
     model_name_or_path = 'BAAI/bge-base-zh-v1.5'
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    dataset = EmbeddingDistillDataset(train_data_path,train_dataset_vec_path, tokenizer,teatch_emebedding_dim=1792*2)
+    dataset = EmbeddingDistillDataset(train_data_path,train_dataset_vec_path, tokenizer,teacher_embedding_dim=1792*2)
     dataloader = DataLoader(dataset,
                             batch_size=512,
                             shuffle=False,
