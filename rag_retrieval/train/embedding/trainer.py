@@ -57,14 +57,13 @@ class Trainer:
         self.current_step = 0
 
     def train(self):
+        self.optimizer.zero_grad()
         for current_epoch in range(1, self.epochs + 1):
             self.model.train()
             self.progress_bar.on_epoch_start()
 
             for batch_index, batch in enumerate(self.train_dataloader):
                 with self.accelerator.accumulate(self.model):
-                    self.optimizer.zero_grad()
-                
                     batch_output=self.model(**batch,accelerator=self.accelerator)
                     loss = batch_output['loss']
 
@@ -72,6 +71,7 @@ class Trainer:
                     self.optimizer.step()
                     
                     self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
                     self.train_loss_tracker.update(loss)
 
                 self.progress_bar.update()
@@ -189,26 +189,32 @@ def evaluate(
     loss_tracker: LossTracker | None = None,
     accelerator: Accelerator | None = None,
 ):
+    was_training = model.training
     model.eval()
-    loss_tracker = loss_tracker or LossTracker()
-    validation_dict = {}
-    for batch in dataloader:
-        with torch.inference_mode():
-            batch_output = model(**batch, accelerator=accelerator)
-            loss_tracker.update(batch_output['loss'])
-            for key in batch_output:
-                if key.startswith('accuracy'):
-                    if key not in validation_dict:
-                        validation_dict[key] = batch_output[key]
-                    else:
-                        validation_dict[key] += batch_output[key]
-    for key in validation_dict:
-        if key.startswith('accuracy'):
-            validation_dict[key] = validation_dict[key] / len(dataloader)
-    loss = loss_tracker.loss
-    validation_dict['loss'] = loss
-    loss_tracker.on_epoch_end()
-    return validation_dict
+    try:
+        loss_tracker = loss_tracker or LossTracker()
+        validation_dict = {}
+        for batch in dataloader:
+            with torch.inference_mode():
+                batch_output = model(**batch, accelerator=accelerator)
+                loss_tracker.update(batch_output['loss'])
+                for key in batch_output:
+                    if key.startswith('accuracy'):
+                        if key not in validation_dict:
+                            validation_dict[key] = batch_output[key]
+                        else:
+                            validation_dict[key] += batch_output[key]
+        for key in validation_dict:
+            if key.startswith('accuracy'):
+                validation_dict[key] = validation_dict[key] / len(dataloader)
+        loss = loss_tracker.loss
+        validation_dict['loss'] = loss
+        loss_tracker.on_epoch_end()
+        return validation_dict
+    finally:
+        if was_training:
+            model.train()
+
 
 
 class DummyProgressBar:
