@@ -159,7 +159,7 @@ During the development process, we borrowed or based on the implementation of th
 
 # Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NovaSearch-Team/RAG-Retrieval&type=Date)](https://star-history.com/#NovaSearch-Team/RAG-Retrieval&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=NovaSearch-Team/RAG-Retrieval&type=Date)](https://star-history.dera.page/#NovaSearch-Team/RAG-Retrieval&Date)
 
 # License
 RAG-Retrieval is licensed under the [MIT License](https://github.com/NLPJCL/RAG-Retrieval/blob/master/LICENSE). 
