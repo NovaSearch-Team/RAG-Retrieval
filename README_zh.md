@@ -139,7 +139,7 @@ RAG-Retrieval开发了一个轻量级的python库[rag-retrieval](https://pypi.or
 
 # Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NLPJCL/RAG-Retrieval&type=Date)](https://star-history.com/#NLPJCL/RAG-Retrieval&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=NLPJCL/RAG-Retrieval&type=Date)](https://star-history.dera.page/#NLPJCL/RAG-Retrieval&Date)
 
 # License
 RAG-Retrieval is licensed under the [MIT License](https://github.com/NLPJCL/RAG-Retrieval/blob/master/LICENSE). 
