@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: "RAG-Retrieval: Unify Efficient Fine-tuning of RAG Retrieval, including Embedding, ColBERT, ReRanker."
+type: software
+authors:
+  - family-names: Li
+    given-names: Jiacheng
+version: 0.2.2
+repository-code: "https://github.com/NovaSearch-Team/RAG-Retrieval"
+url: "https://github.com/NLPJCL/RAG-Retrieval"
+keywords:
+  - retrieval-augmented generation
+  - embedding
+  - ColBERT
+  - reranker
+  - information retrieval
