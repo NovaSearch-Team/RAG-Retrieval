@@ -130,13 +130,13 @@ class Trainer:
             self.progress_bar.on_epoch_end()
 
             if self.save_on_epoch_end:
-                if self.accelerator.is_local_main_process:
-                    save_dir = self.get_checkpoint_dir(current_epoch)
-                    print(save_dir)
-                    unwrapped_model = self.accelerator.unwrap_model(self.model)
-                    unwrapped_model.save_pretrained(save_dir, safe_serialization=False)
-                    self.tokenizer.save_pretrained(save_dir)
-                self.accelerator.wait_for_everyone()
+                save_dir = self.get_checkpoint_dir(current_epoch)
+                self.save_model(save_dir)
+
+        self.accelerator.print("Saving model ...")
+        save_dir = os.path.join(self.accelerator.project_dir, "..", "model")
+        self.save_model(save_dir)
+        self.accelerator.print("Saving Successfully!")
 
         self.accelerator.end_training()
 
@@ -152,7 +152,7 @@ class Trainer:
 
         self.accelerator.project_configuration.automatic_checkpoint_naming = False
         output_dir = os.path.join(self.accelerator.project_dir, "checkpoints")
-        if self.accelerator.is_local_main_process:
+        if self.accelerator.is_main_process:
             os.makedirs(output_dir, exist_ok=True)
             folders = [
                 os.path.join(output_dir, folder) for folder in os.listdir(output_dir)
@@ -175,9 +175,23 @@ class Trainer:
                     shutil.rmtree(folder)
 
         output_dir = os.path.join(output_dir, f"checkpoint_{current_epoch-1}")
-        if self.accelerator.is_local_main_process:
+        if self.accelerator.is_main_process:
             os.makedirs(output_dir, exist_ok=True)
         return output_dir
+    
+    def save_model(self, save_dir: str):
+        if self.accelerator.is_main_process:
+            self.accelerator.print(f"Saving to {save_dir}.")
+            self.tokenizer.save_pretrained(save_dir)
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        unwrapped_model.model.save_pretrained(
+            save_dir,
+            is_main_process=self.accelerator.is_main_process,
+            state_dict=self.accelerator.get_state_dict(unwrapped_model.model),
+            save_function=self.accelerator.save,
+            safe_serialization=False
+        )
+        self.accelerator.wait_for_everyone()
 
 
 def evaluate(

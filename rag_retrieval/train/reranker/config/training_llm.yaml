@@ -50,6 +50,7 @@ warmup_proportion: 0.1
 stable_proportion: 0.5
 gradient_accumulation_steps: 2
 mixed_precision: bf16
+gradient_checkpointing: True
 
 ## Logging
 log_interval: 1
