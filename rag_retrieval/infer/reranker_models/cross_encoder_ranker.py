@@ -80,20 +80,31 @@ class CorssEncoderRanker(BaseRanker):
         batch_size: int = 256,
         max_length: int = 512,
         normalize: bool = False,
-        long_doc_process_strategy: str="max_score_slice",#['max_score_slice','max_length_truncation']
+        long_doc_process_strategy: str = "max_score_slice",#['max_score_slice','max_length_truncation']
+        top_k: Optional[int] = None,
+        score_threshold: Optional[float] = None,
     ):  
-        
+        if isinstance(docs, str):
+            docs = [docs]
+
         # remove invalid docs
         docs = [doc[:128000] for doc in docs if isinstance(doc, str) and 0 < len(doc)]
 
         if query is None or len(query) == 0 or len(docs) == 0:
-            return {'rerank_docs': [], 'rerank_scores': []}
+            return RankedResults(results=[], query=query or "", has_scores=True)
         
         vprint(f'long_doc_process_strategy is {long_doc_process_strategy}',self.verbose)
         if long_doc_process_strategy=='max_length_truncation':
-            return self.__max_length_truncation_rerank(query,docs,batch_size,max_length,normalize)
+            ranked_results = self.__max_length_truncation_rerank(query,docs,batch_size,max_length,normalize)
         else:
-            return self.__max_score_slice_rerank(query,docs,batch_size,max_length,normalize)
+            ranked_results = self.__max_score_slice_rerank(query,docs,batch_size,max_length,normalize)
+
+        if score_threshold is not None:
+            ranked_results = ranked_results.filter_by_score(score_threshold)
+        if top_k is not None and top_k > 0:
+            ranked_results.results = ranked_results.results[:top_k]
+
+        return ranked_results
 
     @torch.no_grad()
     def __max_length_truncation_rerank(self,
@@ -220,3 +231,6 @@ class CorssEncoderRanker(BaseRanker):
                     sentence_pairs_idxs.append(idx)
         
         return sentence_pairs, sentence_pairs_idxs
+
+
+CrossEncoderRanker = CorssEncoderRanker

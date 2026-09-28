@@ -166,7 +166,9 @@ results=[Result(doc_id=1, text='The giant panda (Ailuropoda melanoleuca), someti
         batch_size: int = 256,
         max_length: int = 512,
         normalize: bool = False,
-        long_doc_process_strategy: str="max_score_slice",#['max_score_slice','max_length_truncation']
+        long_doc_process_strategy: str = "max_score_slice", # ['max_score_slice', 'max_length_truncation']
+        top_k: Optional[int] = None,
+        score_threshold: Optional[float] = None,
     ):  
 ```
 
@@ -179,17 +181,30 @@ results=[Result(doc_id=1, text='The giant panda (Ailuropoda melanoleuca), someti
 - long_doc_process_strategy： 对于长doc处理的逻辑，可以选择
     - max_score_slice：将长doc按照长度切分，分别计算query和所有子doc的分数，取query与最大的子doc的分数作为query和整个doc的分数。
     - max_length_truncation：query加doc的长度超过max_length就会截断,来计算分数。
+- top_k：可选参数，返回前 k 个排序结果。
+- score_threshold：可选参数，仅保留得分大于等于该阈值的文档。
 
 对于LLM ranker 中的BAAI/bge-reranker-v2-minicpm-layerwise模型，可以在这里传递cutoff_layers指定推理的层数。其余模型不需要传递。
 - cutoff_layers: list = None,
 
 **返回解释**
 
-返回是一个RankedResults对象，其主要的属性有：results: List[Result]。一组Result对象，而Result的属性有：
+返回是一个 `RankedResults` 对象，其主要的属性有：`results: List[Result]`。每个 `Result` 对象的属性有：
 - doc_id: Union[int, str]
 - text: str
 - score: Optional[float] = None
 - rank: Optional[int] = None
 
-RankedResults对象也有一些常见的方法如top_k:按照score返回top_k个Result.get_score_by_docid:输入doc在输入的顺序，得到对应的score。
+`RankedResults` 提供丰富的 Pythonic 方法：
+- `len(doc_ranked)`: 获取结果总数。
+- `for res in doc_ranked:`: 直接遍历结果。
+- `doc_ranked[0]`, `doc_ranked[:2]`: 支持索引和切片。
+- `doc_ranked.top_k(k)`: 按照得分返回前 k 个 Result。
+- `doc_ranked.get_score_by_docid(doc_id)`: 根据 doc_id 获取对应得分。
+- `doc_ranked.filter_by_score(min_score)`: 过滤出得分 >= min_score 的结果集。
+- `doc_ranked.filter_by_rank(max_rank)`: 过滤出排名 <= max_rank 的结果集。
+- `doc_ranked.get_texts()`: 提取所有文档文本列表。
+- `doc_ranked.get_doc_ids()`: 提取所有文档 ID 列表。
+- `doc_ranked.to_dict()`, `doc_ranked.to_list()`: 便捷序列化为字典或字典列表。
+
 
